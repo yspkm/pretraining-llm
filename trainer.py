@@ -173,8 +173,9 @@ class Trainer:
             with self.amp_ctx_bfloat16:
                 y_hat = self.model_wrapper(batch[:, :-1].to(torch.device('cuda:0')))
                 loss = self.criterion(y_hat.permute(0, 2, 1), batch[:, 1:].to(torch.device('cuda:3')))
+                loss = loss / self.grad_accum_steps
                 loss.backward()
-                iter_loss = loss.item()
+                iter_loss = loss.item() * self.grad_accum_steps
                 train_losses += iter_loss
 
                 del batch, y_hat, loss
