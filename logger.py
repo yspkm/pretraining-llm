@@ -63,6 +63,9 @@ class TrainingLogger:
         self.writer.add_scalar('loss/train', train_loss, current_steps)
         self.writer.add_scalar('loss/val', val_loss, current_steps)
         self.writer.add_scalar('learning_rate', lr, current_steps)
+
+    def wandb_log_cur_step_only(self, current_steps, train_loss, lr, iter_time, grad_norm):
+        wandb.log({"current_steps": current_steps, "train_loss": train_loss, "learning_rate": lr, 'iter_time': iter_time, "grad_norm": grad_norm})
     
     def get_vram_usage_str(self)->str:
         vram_usage = {f"GPU{i}": pynvml.nvmlDeviceGetMemoryInfo(pynvml.nvmlDeviceGetHandleByIndex(i)).used / 1024 ** 3

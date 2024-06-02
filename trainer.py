@@ -135,8 +135,8 @@ class Trainer:
             self.optimizer, 
             lr_lambda=partial(
                 self.lr_lambda, 
-                warmup_steps=self.warmup_steps // self.grad_accum_steps, 
-                total_steps=self.total_steps // self.grad_accum_steps))
+                warmup_steps=self.warmup_steps, 
+                total_steps=self.total_steps))
         self.amp_ctx_bfloat16 = torch.cuda.amp.autocast(dtype=torch.bfloat16)
 
 
@@ -169,35 +169,46 @@ class Trainer:
         iter_loss = 0.0
         while self.global_step < self.total_steps:
             start_time = time.time()
-            batch: torch.TensorBase = next(iterator)
+            iter_loss = 0.0
             with self.amp_ctx_bfloat16:
-                y_hat = self.model_wrapper(batch[:, :-1].to(torch.device('cuda:0')))
-                loss = self.criterion(y_hat.permute(0, 2, 1), batch[:, 1:].to(torch.device('cuda:3')))
-                loss = loss / self.grad_accum_steps
-                loss.backward()
-                iter_loss = loss.item() * self.grad_accum_steps
+                # Gradient Accumulation Steps
+                for _ in range(self.grad_accum_steps):
+                    batch: torch.TensorBase = next(iterator)
+                    y_hat = self.model_wrapper(batch[:, :-1].to(torch.device('cuda:0')))
+                    loss = self.criterion(y_hat.permute(0, 2, 1), batch[:, 1:].to(torch.device('cuda:3')))
+                    loss = loss / self.grad_accum_steps
+                    loss.backward()
+                    iter_loss += loss.item() 
+
+                    del batch, y_hat, loss
+                    gc.collect() 
+                    torch.cuda.empty_cache()
+
                 train_losses += iter_loss
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model_wrapper.parameters(), max_norm=1.0)
 
-                del batch, y_hat, loss
-                gc.collect() 
-                torch.cuda.empty_cache()
+                self.optimizer.step()
+                self.optimizer.zero_grad()
+                self.scheduler.step()
 
-                if (self.global_step + 1) % self.grad_accum_steps == 0:
-                    torch.nn.utils.clip_grad_norm_(self.model_wrapper.parameters(), max_norm=1.0)
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
-                    self.scheduler.step()
                 end_time = time.time()
                 iter_time = end_time - start_time
                 vram_usage_str = self.logger.get_vram_usage_str()
 
+                self.logger.wandb_log_cur_step_only(
+                    current_steps=self.global_step, 
+                    train_loss=iter_loss, 
+                    lr=self.optimizer.param_groups[0]['lr'], 
+                    iter_time=iter_time, 
+                    grad_norm=grad_norm)
+
                 print(f"step: {self.global_step:>6}, "
                     f"iter loss: {iter_loss:>7.5f}, "
                     f"grad_accum_step: {self.global_step % self.grad_accum_steps:>2}, "
-                    f"iter_times: {iter_time:>5.2f} s, "
-                    f"vram: {vram_usage_str}, "
-                    f"lr: {self.optimizer.param_groups[0]['lr']:>.5e}") 
-
+                    f"iter_times: {iter_time:>5.2f}s, "
+                    f"lr: {self.optimizer.param_groups[0]['lr']:>.4e}, "
+                    f"grad_norm: {grad_norm:>.4e}, ",
+                    f"vram: {vram_usage_str}")
                 
                 if (self.global_step + 1) % self.val_interval == 0:
                     train_loss = train_losses / self.val_interval
