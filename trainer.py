@@ -182,6 +182,7 @@ class Trainer:
                 torch.cuda.empty_cache()
 
                 if (self.global_step + 1) % self.grad_accum_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(self.model_wrapper.parameters(), max_norm=1.0)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
                     self.scheduler.step()
