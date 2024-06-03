@@ -36,9 +36,9 @@ This project aims to serve as a study for pretraining a large language model. Th
 
 3. Install the required packages:
    ```bash
-   pip3 install --upgrade pip wheel setuptools
-   pip3 install -r requirements.txt
-   pip3 install torch torchinfo --extra-index-url https://download.pytorch.org/whl/cu121
+   pip install --upgrade pip wheel setuptools
+   pip install -r requirements.txt
+   pip install torch torchinfo --extra-index-url https://download.pytorch.org/whl/cu121
    ```
 
 ## Usage
@@ -46,14 +46,14 @@ This project aims to serve as a study for pretraining a large language model. Th
 ### Data Preprocessing
 To preprocess the data, run the following command:
 ```bash
-python ./data/prep_dataset.py
+python main.py prep_data
 ```
 This script tokenizes the dataset using `tiktoken` for speedy encoding and saves the tokenized data into binary files for training, validation, and evaluation.
 
 ### Training the Model
 To train the model, run the following command:
 ```bash
-python main.py
+python main.py train
 ```
 
 ### Running TensorBoard
@@ -102,7 +102,6 @@ config:
   batch_size: 20 
   val_interval: 1000 
   total_steps: 550000
-  # 4409721
   val_steps: 50 
   grad_accum_steps: 25
   lr_peak: 0.000025 # 휴리스틱
@@ -113,7 +112,6 @@ config:
 wandb:
   project_name: "AutoLLaMA"
   model_name: "llama"
-
 ```
 
 ## Contributing
