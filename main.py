@@ -4,6 +4,8 @@ import random
 from trainer import Trainer
 import yaml
 from data import DataPreprocessor
+import numpy as np
+
 
 def prep_data(config):
     data_pre_processor = DataPreprocessor(
@@ -19,6 +21,7 @@ def prep_data(config):
         dtype=eval(config['dtype'])
     )
     data_pre_processor.run()
+
 
 def train(config):
     config['devices'] = [torch.device(device) for device in config['devices']]
@@ -56,19 +59,15 @@ def train(config):
     )
     trainer.train()
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run data preprocessing or training")
 
-    parser.add_argument("task", 
-                        choices=["prep_data", "train", "help"], 
-                        help="Task to run: 'prep_data', 'train', or 'help'")
-
+    parser.add_argument("task",
+                        choices=["prep_data", "train"],
+                        help="Task to run: 'prep_data' or 'train'")
     args = parser.parse_args()
-
-    if args.task == "help":
-        parser.print_help()
-        return
 
     with open('config.yaml', 'r') as file:
         yaml_file = yaml.safe_load(file)
@@ -77,6 +76,7 @@ def main():
         prep_data(yaml_file['prep_data'])
     elif args.task == "train":
         train(yaml_file['train'])
+
 
 if __name__ == "__main__":
     main()

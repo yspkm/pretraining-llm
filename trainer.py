@@ -1,13 +1,12 @@
 from tqdm import tqdm
 import torch
 import math
-from model import LLaMA 
+from model import LLaMA
 import time
-import numpy as np
 
 import torch
 from torch import nn, optim
-from torch.optim.lr_scheduler import LambdaLR 
+from torch.optim.lr_scheduler import LambdaLR
 import pandas as pd
 from torchinfo import summary
 from fairscale.nn import pipe
@@ -15,34 +14,21 @@ from tiktoken import get_encoding
 
 from logger import TrainingLogger
 
-from data import create_dataloader 
+from data import create_dataloader
 from pathlib import Path
 import math
 from functools import partial
 import gc
 import yaml
 
-class Trainer: 
-    def __init__(self, 
-                 max_len_seq=2048, 
-                 num_layers=12, 
-                 dim_model=4096, 
-                 dim_hidden=4096*3, 
-                 num_heads=32, 
-                 prob_dropout=0.25, 
-                 batch_size=8, 
-                 val_interval=2000, 
-                 total_steps=600000, 
-                 val_steps=100,
-                 grad_accum_steps=64, 
-                 lr_peak=2.5e-4, 
-                 weight_decay=0.01, 
-                 warmup_steps=0.05,
-                 balance=[5, 4, 4, 1], 
-                 devices=[torch.device(f'cuda:{i}') for i in range(4)]):
+
+class Trainer:
+    def __init__(self, max_len_seq, num_layers, dim_model, dim_hidden, num_heads, prob_dropout, batch_size,
+                 val_interval, total_steps, val_steps, grad_accum_steps, lr_peak, weight_decay, warmup_steps, balance,
+                 devices):
 
         self.tokenizer = get_encoding('gpt2')
-        self.criterion = nn.CrossEntropyLoss() 
+        self.criterion = nn.CrossEntropyLoss()
 
         # Model hyperparameters
         self.max_len_seq = max_len_seq
@@ -56,9 +42,9 @@ class Trainer:
 
         # Training parameters
         self.val_interval = val_interval
-        self.val_steps = val_steps 
+        self.val_steps = val_steps
         self.total_steps = total_steps
-        self.grad_accum_steps = grad_accum_steps 
+        self.grad_accum_steps = grad_accum_steps
         self.global_step = 0
         self.lr_peak = lr_peak
         self.weight_decay = weight_decay
@@ -68,7 +54,7 @@ class Trainer:
         self.data_dir = self.root_dir / 'data'
         self.results_dir = self.root_dir / 'results'
 
-        with open('config.yaml', 'r') as file: 
+        with open('config.yaml', 'r') as file:
             yaml_file = yaml.safe_load(file)
             wandb_config = yaml_file['wandb']
             self.project_name = wandb_config['project_name']
@@ -97,52 +83,55 @@ class Trainer:
         }
 
         self.logger = TrainingLogger(
-            project_name=self.project_name, 
-            model_name=self.model_name, 
-            hyperparams=self.hyperparams, 
+            project_name=self.project_name,
+            model_name=self.model_name,
+            hyperparams=self.hyperparams,
             results_dir=self.results_dir)
 
-        self.eval_dl = create_dataloader(data_dir=self.data_dir, split='eval', block_size=max_len_seq, batch_size=batch_size)
-        self.val_dl = create_dataloader(data_dir=self.data_dir, split='val', block_size=max_len_seq, batch_size=batch_size) 
-        self.train_dl = create_dataloader(data_dir=self.data_dir, split='train', block_size=max_len_seq, batch_size=batch_size)
+        self.eval_dl = create_dataloader(data_dir=self.data_dir, split='eval', block_size=max_len_seq,
+                                         batch_size=batch_size)
+        self.val_dl = create_dataloader(data_dir=self.data_dir, split='val', block_size=max_len_seq,
+                                        batch_size=batch_size)
+        self.train_dl = create_dataloader(data_dir=self.data_dir, split='train', block_size=max_len_seq,
+                                          batch_size=batch_size)
 
         print("Loading model...")
-        self.model = LLaMA(vocab_size=self.vocab_size, 
-            max_len_seq=max_len_seq, 
-            n_layers=num_layers, 
-            d_model=dim_model, 
-            d_ff=self.dim_hidden, 
-            n_heads=num_heads, 
-            drop_p=prob_dropout)
+        self.model = LLaMA(vocab_size=self.vocab_size,
+                           max_len_seq=max_len_seq,
+                           n_layers=num_layers,
+                           d_model=dim_model,
+                           d_ff=self.dim_hidden,
+                           n_heads=num_heads,
+                           drop_p=prob_dropout)
 
         summary(self.model, depth=100)
-        
+
         self.model_wrapper = pipe.Pipe(
             module=nn.Sequential(
                 nn.Sequential(self.model.decoder.emb_in, self.model.decoder.dropout),
                 *[layer for layer in self.model.decoder.layers],
                 nn.Sequential(self.model.decoder.norm_out, self.model.decoder.fc_out)
-            ), 
-            balance=self.balance, 
+            ),
+            balance=self.balance,
             devices=self.devices,
-            chunks=self.batch_size) # OOM피할 목적..
+            chunks=self.batch_size)  # OOM피할 목적..
 
         summary(self.model_wrapper, depth=100)
 
         self.params = [p for p in self.model_wrapper.parameters() if p.requires_grad]
-        self.optimizer = optim.AdamW(self.params, lr=lr_peak, weight_decay=weight_decay) 
+        self.optimizer = optim.AdamW(self.params, lr=lr_peak, weight_decay=weight_decay)
         self.scheduler = LambdaLR(
-            self.optimizer, 
+            self.optimizer,
             lr_lambda=partial(
-                self.lr_lambda, 
-                warmup_steps=self.warmup_steps, 
+                self.lr_lambda,
+                warmup_steps=self.warmup_steps,
                 total_steps=self.total_steps))
         self.amp_ctx_bfloat16 = torch.cuda.amp.autocast(dtype=torch.bfloat16)
 
+    def lr_lambda(self, step, warmup_steps, total_steps):
+        return min(step / warmup_steps,
+                   0.5 * (1 + math.cos(math.pi * (step - warmup_steps) / (total_steps - warmup_steps))))
 
-    def lr_lambda(self, step, warmup_steps, total_steps): 
-        return min(step / warmup_steps, 0.5 * (1 + math.cos(math.pi * (step - warmup_steps) / (total_steps - warmup_steps)))) 
-  
     @torch.no_grad()
     def estimate_loss(self, split):
         self.model_wrapper.eval()
@@ -150,7 +139,7 @@ class Trainer:
         losses = 0.0
         iterator = iter(dl)
         for i in tqdm(range(self.val_steps), desc=f"loss estimation for {split} split.", leave=False):
-            batch: torch.TensorBase = next(iterator) 
+            batch: torch.TensorBase = next(iterator)
             with self.amp_ctx_bfloat16:
                 y_hat = self.model_wrapper(batch[:, :-1].to(torch.device('cuda:0')))
                 loss = self.criterion(y_hat.permute(0, 2, 1), batch[:, 1:].to(torch.device('cuda:3'))).item()
@@ -161,10 +150,10 @@ class Trainer:
     def train(self):
         best_val_loss = float('inf')
         self.global_step = 0
-    
+
         self.optimizer.zero_grad()
 
-        iterator = iter(self.train_dl) 
+        iterator = iter(self.train_dl)
         while self.global_step < self.total_steps:
             start_time = time.time()
             iter_loss = 0.0
@@ -176,10 +165,10 @@ class Trainer:
                     loss = self.criterion(y_hat.permute(0, 2, 1), batch[:, 1:].to(torch.device('cuda:3')))
                     loss = loss / self.grad_accum_steps
                     loss.backward()
-                    iter_loss += loss.item() 
+                    iter_loss += loss.item()
 
                     del batch, y_hat, loss
-                    gc.collect() 
+                    gc.collect()
                     torch.cuda.empty_cache()
 
                 total_grad_norm = torch.nn.utils.clip_grad_norm_(self.model_wrapper.parameters(), max_norm=1.0)
@@ -193,19 +182,21 @@ class Trainer:
                 iter_time = end_time - start_time
 
                 self.logger.log_training(
-                    current_steps=self.global_step, 
-                    train_loss=iter_loss, 
+                    current_steps=self.global_step,
+                    train_loss=iter_loss,
                     lr=self.optimizer.param_groups[0]['lr'],
                     iter_time=iter_time,
                     total_grad_norm=total_grad_norm,
-                    grad_norms=grad_norms) 
+                    grad_norms=grad_norms)
 
                 if (self.global_step + 1) % self.val_interval == 0:
                     val_loss = self.estimate_loss('val')
                     self.logger.log_validation(current_steps=self.global_step, val_loss=val_loss)
-            
+
                     if val_loss < best_val_loss:
-                        self.logger.save_checkpoint(model=self.model, current_steps=self.global_step, max_steps=self.total_steps, optimizer=self.optimizer, scheduler=self.scheduler)
+                        self.logger.save_checkpoint(model=self.model, current_steps=self.global_step,
+                                                    max_steps=self.total_steps, optimizer=self.optimizer,
+                                                    scheduler=self.scheduler)
                         best_val_loss = val_loss
-            
+
             self.global_step += 1

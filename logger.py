@@ -8,6 +8,7 @@ import pynvml
 import math
 from typing import Dict
 
+
 class TrainingLogger:
     def __init__(self, project_name, model_name, hyperparams, results_dir, notes=""):
         self.run_name = self.generate_run_name(project_name, model_name, hyperparams, notes)
@@ -62,19 +63,19 @@ class TrainingLogger:
             f"loss/val: {val_loss:6.5f}, "
             f"ppl/val: {math.exp(val_loss):10.5f}")
 
-        wandb.log({"loss/val": val_loss, 
+        wandb.log({"loss/val": val_loss,
                    "ppl/val": math.exp(val_loss)}, step=current_steps)
 
         self.writer.add_scalar('loss/val', val_loss, current_steps)
         self.writer.add_scalar('ppl/val', math.exp(val_loss), current_steps)
 
     def log_training(self, current_steps, train_loss, lr, iter_time, total_grad_norm, grad_norms):
-        #import time
-        #start_time = time.time()
+        # import time
+        # start_time = time.time()
 
         vram_usage = self.get_vram_usage()
         vram_usage_str = ", ".join([f"{key}: {value:.1f}GB" for key, value in vram_usage.items()])
-        
+
         self.logger.info(
             f"step: {current_steps}, "
             f"iter_time: {iter_time:.3f}, "
@@ -84,7 +85,7 @@ class TrainingLogger:
             f"total_grad_norm: {total_grad_norm:.5e}, "
             f"vram_usage: {vram_usage_str}")
 
-        wandb.log(data={"loss/train": train_loss, 
+        wandb.log(data={"loss/train": train_loss,
                         "iter_time": iter_time,
                         "learning_rate": lr,
                         "ppl/train": math.exp(train_loss),
@@ -103,9 +104,9 @@ class TrainingLogger:
         for key, value in grad_norms.items():
             self.writer.add_scalar(tag=f'grad_norm/{key}', scalar_value=value, global_step=current_steps)
 
-        #end_time = time.time()
-        #elapsed_time = end_time - start_time
-        #print(f"Logging time: {elapsed_time:.3f} seconds") # 0.08 ~ 0.14 s,
+        # end_time = time.time()
+        # elapsed_time = end_time - start_time
+        # print(f"Logging time: {elapsed_time:.3f} seconds") # 0.08 ~ 0.14 s,
 
     @staticmethod
     def get_vram_usage() -> Dict[str, float]:
@@ -125,7 +126,7 @@ class TrainingLogger:
         torch.save({
             'state_dict': model.state_dict(),
             'current_steps': current_steps,
-            'max_steps': max_steps, 
+            'max_steps': max_steps,
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict()
         }, self.checkpoint_path)
