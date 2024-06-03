@@ -56,6 +56,13 @@ To train the model, run the following command:
 python main.py
 ```
 
+### Running TensorBoard
+To monitor the training process with TensorBoard, use the following command. The log directory is set to `rootdir/results/run_name`, which is generated based on the current configuration.
+
+```bash
+tensorboard --logdir rootdir/results/$(python -c "from logger import TrainingLogger; print(TrainingLogger.generate_run_name('AutoLLaMA', 'llama', {}, ''))") --port 6006 --host 0.0.0.0
+```
+
 ### Configuration
 The hyperparameters and other configurations are defined in the `config.yaml` file. You can modify this file to change the settings for training, such as batch size, learning rate, number of layers, etc.
 
@@ -88,24 +95,25 @@ The `config.yaml` file contains all the configurations for the training process.
 config:
   max_len_seq: 1024 
   num_layers: 32
-  dim_model: 2048 
-  dim_hidden: 6144 
-  num_heads: 32
+  dim_model: 2304 
+  dim_hidden: 9216 
+  num_heads: 36
   prob_dropout: 0.50
   batch_size: 20 
-  val_interval: 1024 
+  val_interval: 1000 
   total_steps: 550000
+  # 4409721
   val_steps: 50 
   grad_accum_steps: 25
-  lr_peak: 0.00005
+  lr_peak: 0.000025 # 휴리스틱
   weight_decay: 0.01
-  warmup_steps: 2000 
+  warmup_steps: 2000
   balance: [11, 11, 11, 1]
   devices: ["cuda:0", "cuda:1", "cuda:2", "cuda:3"]
-
 wandb:
   project_name: "AutoLLaMA"
   model_name: "llama"
+
 ```
 
 ## Contributing
