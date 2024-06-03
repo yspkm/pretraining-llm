@@ -68,39 +68,58 @@ class TrainingLogger:
         self.writer.add_scalar('loss/val', val_loss, current_steps)
         self.writer.add_scalar('ppl/val', math.exp(val_loss), current_steps)
 
-    def log_training(self, current_steps, train_loss, lr, iter_time, grad_norm):
+    def log_training(self, current_steps, train_loss, lr, iter_time, total_grad_norm, grad_norms):
+        #import time
+        #start_time = time.time()
+
         vram_usage = self.get_vram_usage()
         vram_usage_str = ", ".join([f"{key}: {value:.1f}GB" for key, value in vram_usage.items()])
         
         self.logger.info(
             f"step: {current_steps}, "
-            f"iter_time: {iter_time}, "
+            f"iter_time: {iter_time:.3f}, "
             f"learning_rate: {lr:.3e}, "
             f"loss/train: {train_loss:6.5f}, "
             f"ppl/train: {math.exp(train_loss):10.5f}, "
-            f"grad_norm: {grad_norm:.5e}, "
+            f"total_grad_norm: {total_grad_norm:.5e}, "
             f"vram_usage: {vram_usage_str}")
 
         wandb.log(data={"loss/train": train_loss, 
                         "iter_time": iter_time,
                         "learning_rate": lr,
                         "ppl/train": math.exp(train_loss),
-                        "grad_norm": grad_norm,
-                        **vram_usage},
+                        **{f"vram/{key}": value for key, value in vram_usage.items()},
+                        **{f"grad_norm/{key}": value for key, value in grad_norms.items()},
+                        "grad_norm/total": total_grad_norm},
                   step=current_steps)
 
         self.writer.add_scalar(tag='iter_time', scalar_value=iter_time, global_step=current_steps)
         self.writer.add_scalar(tag='learning_rate', scalar_value=lr, global_step=current_steps)
         self.writer.add_scalar(tag='loss/train', scalar_value=train_loss, global_step=current_steps)
         self.writer.add_scalar(tag='ppl/train', scalar_value=math.exp(train_loss), global_step=current_steps)
-        self.writer.add_scalar(tag='grad_norm', scalar_value=grad_norm, global_step=current_steps)
+        self.writer.add_scalar(tag='grad_norm/total', scalar_value=total_grad_norm, global_step=current_steps)
         for key, value in vram_usage.items():
-            self.writer.add_scalar(tag=f'vram_usage/{key}', scalar_value=value, global_step=current_steps)
+            self.writer.add_scalar(tag=f'vram/{key}', scalar_value=value, global_step=current_steps)
+        for key, value in grad_norms.items():
+            self.writer.add_scalar(tag=f'grad_norm/{key}', scalar_value=value, global_step=current_steps)
 
-    def get_vram_usage(self) -> Dict[str, float]:
-        vram_usage = {f"GPU{i}": pynvml.nvmlDeviceGetMemoryInfo(pynvml.nvmlDeviceGetHandleByIndex(i)).used / 1024 ** 3
+        #end_time = time.time()
+        #elapsed_time = end_time - start_time
+        #print(f"Logging time: {elapsed_time:.3f} seconds") # 0.08 ~ 0.14 s,
+
+    @staticmethod
+    def get_vram_usage() -> Dict[str, float]:
+        vram_usage = {f"gpu{i}": pynvml.nvmlDeviceGetMemoryInfo(pynvml.nvmlDeviceGetHandleByIndex(i)).used / 1024 ** 3
                       for i in range(pynvml.nvmlDeviceGetCount())}
         return vram_usage
+
+    @staticmethod
+    def calculate_grad_norm(model):
+        grad_norms = {}
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                grad_norms[name] = torch.norm(param.grad).item()
+        return grad_norms
 
     def save_checkpoint(self, model, current_steps, max_steps, optimizer, scheduler):
         torch.save({

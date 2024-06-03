@@ -182,7 +182,8 @@ class Trainer:
                     gc.collect() 
                     torch.cuda.empty_cache()
 
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.model_wrapper.parameters(), max_norm=1.0)
+                total_grad_norm = torch.nn.utils.clip_grad_norm_(self.model_wrapper.parameters(), max_norm=1.0)
+                grad_norms = self.logger.calculate_grad_norm(model=self.model)
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
@@ -196,7 +197,8 @@ class Trainer:
                     train_loss=iter_loss, 
                     lr=self.optimizer.param_groups[0]['lr'],
                     iter_time=iter_time,
-                    grad_norm=grad_norm) 
+                    total_grad_norm=total_grad_norm,
+                    grad_norms=grad_norms) 
 
                 if (self.global_step + 1) % self.val_interval == 0:
                     val_loss = self.estimate_loss('val')
