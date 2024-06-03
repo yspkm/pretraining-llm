@@ -165,8 +165,6 @@ class Trainer:
         self.optimizer.zero_grad()
 
         iterator = iter(self.train_dl) 
-        train_losses = 0.0
-        iter_loss = 0.0
         while self.global_step < self.total_steps:
             start_time = time.time()
             iter_loss = 0.0
@@ -184,7 +182,6 @@ class Trainer:
                     gc.collect() 
                     torch.cuda.empty_cache()
 
-                train_losses += iter_loss
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model_wrapper.parameters(), max_norm=1.0)
 
                 self.optimizer.step()
@@ -193,28 +190,17 @@ class Trainer:
 
                 end_time = time.time()
                 iter_time = end_time - start_time
-                vram_usage_str = self.logger.get_vram_usage_str()
 
-                self.logger.wandb_log_cur_step_only(
+                self.logger.log_training(
                     current_steps=self.global_step, 
                     train_loss=iter_loss, 
-                    lr=self.optimizer.param_groups[0]['lr'], 
-                    iter_time=iter_time, 
-                    grad_norm=grad_norm)
+                    lr=self.optimizer.param_groups[0]['lr'],
+                    iter_time=iter_time,
+                    grad_norm=grad_norm) 
 
-                print(f"step: {self.global_step:>6}, "
-                    f"iter loss: {iter_loss:>7.5f}, "
-                    f"grad_accum_step: {self.global_step % self.grad_accum_steps:>2}, "
-                    f"iter_times: {iter_time:>5.2f}s, "
-                    f"lr: {self.optimizer.param_groups[0]['lr']:>.4e}, "
-                    f"grad_norm: {grad_norm:>.4e}, ",
-                    f"vram: {vram_usage_str}")
-                
                 if (self.global_step + 1) % self.val_interval == 0:
-                    train_loss = train_losses / self.val_interval
                     val_loss = self.estimate_loss('val')
-            
-                    self.logger.log_metrics(current_steps=self.global_step, train_loss=train_loss, val_loss=val_loss, lr=self.optimizer.param_groups[0]['lr'])
+                    self.logger.log_validation(current_steps=self.global_step, val_loss=val_loss)
             
                     if val_loss < best_val_loss:
                         self.logger.save_checkpoint(model=self.model, current_steps=self.global_step, max_steps=self.total_steps, optimizer=self.optimizer, scheduler=self.scheduler)

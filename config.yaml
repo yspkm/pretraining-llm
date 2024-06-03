@@ -8,10 +8,10 @@ config:
   batch_size: 20 
   val_interval: 1000
   total_steps: 550000
-  # 4409721 / 8
+  # 4409721
   val_steps: 50 
   grad_accum_steps: 25
-  lr_peak: 0.00025
+  lr_peak: 0.000025
   weight_decay: 0.01
   warmup_steps: 2000
   balance: [11, 11, 11, 1]
