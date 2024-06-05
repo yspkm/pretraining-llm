@@ -25,10 +25,11 @@ import yaml
 class Trainer:
     def __init__(self, max_len_seq, num_layers, dim_model, dim_hidden, num_heads, prob_dropout, batch_size,
                  val_interval, total_steps, val_steps, grad_accum_steps, lr_peak, weight_decay, warmup_steps, balance,
-                 devices):
+                 devices, chunks):
 
         self.tokenizer = get_encoding('gpt2')
-        self.criterion = nn.CrossEntropyLoss()
+
+        self.criterion = nn.CrossEntropyLoss() 
 
         # Model hyperparameters
         self.max_len_seq = max_len_seq
@@ -62,6 +63,7 @@ class Trainer:
 
         self.devices = devices
         self.balance = balance
+        self.chunks = chunks
 
         self.hyperparams = {
             'max_len_seq': max_len_seq,
@@ -79,7 +81,8 @@ class Trainer:
             'weight_decay': weight_decay,
             'warmup_steps': warmup_steps,
             'balance': balance,
-            'devices': devices
+            'devices': devices,
+            'chunks': chunks
         }
 
         self.logger = TrainingLogger(
@@ -114,7 +117,7 @@ class Trainer:
             ),
             balance=self.balance,
             devices=self.devices,
-            chunks=self.batch_size)  # OOM피할 목적..
+            chunks=self.chunks)  # OOM피할 목적..
 
         summary(self.model_wrapper, depth=100)
 
@@ -163,8 +166,10 @@ class Trainer:
                     batch: torch.TensorBase = next(iterator)
                     y_hat = self.model_wrapper(batch[:, :-1].to(torch.device('cuda:0')))
                     loss = self.criterion(y_hat.permute(0, 2, 1), batch[:, 1:].to(torch.device('cuda:3')))
+                    #loss = loss / (self.grad_accum_steps * self.chunks)
                     loss = loss / self.grad_accum_steps
                     loss.backward()
+                    #iter_loss += self.chunks * loss.item()
                     iter_loss += loss.item()
 
                     del batch, y_hat, loss

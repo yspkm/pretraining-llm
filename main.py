@@ -55,7 +55,8 @@ def train(config):
         weight_decay=config['weight_decay'],
         warmup_steps=config['warmup_steps'],
         balance=config['balance'],
-        devices=config['devices']
+        devices=config['devices'],
+        chunks=config['chunks']
     )
     trainer.train()
 
