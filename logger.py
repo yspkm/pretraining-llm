@@ -91,14 +91,14 @@ class TrainingLogger:
                         "ppl/train": math.exp(train_loss),
                         **{f"vram/{key}": value for key, value in vram_usage.items()},
                         **{f"grad_norm/{key}": value for key, value in grad_norms.items()},
-                        "grad_norm/total": total_grad_norm},
+                        "total_grad_norm": total_grad_norm},
                   step=current_steps)
 
         self.writer.add_scalar(tag='iter_time', scalar_value=iter_time, global_step=current_steps)
         self.writer.add_scalar(tag='learning_rate', scalar_value=lr, global_step=current_steps)
         self.writer.add_scalar(tag='loss/train', scalar_value=train_loss, global_step=current_steps)
         self.writer.add_scalar(tag='ppl/train', scalar_value=math.exp(train_loss), global_step=current_steps)
-        self.writer.add_scalar(tag='grad_norm/total', scalar_value=total_grad_norm, global_step=current_steps)
+        self.writer.add_scalar(tag='total_grad_norm', scalar_value=total_grad_norm, global_step=current_steps)
         for key, value in vram_usage.items():
             self.writer.add_scalar(tag=f'vram/{key}', scalar_value=value, global_step=current_steps)
         for key, value in grad_norms.items():
