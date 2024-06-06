@@ -53,7 +53,8 @@ This script tokenizes the dataset using `tiktoken` for speedy encoding and saves
 ### Training the Model
 To train the model, run the following command:
 ```bash
-python main.py train
+# e.g. single node, 4 gpus
+torchrun --standalone --nproc_per_node=4 main.py train
 ```
 
 ### Running TensorBoard
@@ -89,30 +90,7 @@ The hyperparameters and other configurations are defined in the `config.yaml` fi
 ```
 
 ## Configuration
-The `config.yaml` file contains all the configurations for the training process. Here is an example configuration:
-
-```yaml
-config:
-  max_len_seq: 1024 
-  num_layers: 32
-  dim_model: 2304 
-  dim_hidden: 9216 
-  num_heads: 36
-  prob_dropout: 0.50
-  batch_size: 20 
-  val_interval: 1000 
-  total_steps: 550000
-  val_steps: 50 
-  grad_accum_steps: 25
-  lr_peak: 0.000025 # 휴리스틱
-  weight_decay: 0.01
-  warmup_steps: 2000
-  balance: [11, 11, 11, 1]
-  devices: ["cuda:0", "cuda:1", "cuda:2", "cuda:3"]
-wandb:
-  project_name: "AutoLLaMA"
-  model_name: "llama"
-```
+The `config.yaml` file contains all the configurations for the training process. 
 
 ## Contributing
 Contributions are welcome! Please fork the repository and submit a pull request.
