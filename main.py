@@ -24,20 +24,11 @@ def prep_data(config):
 
 
 def train(config):
-    config['devices'] = [torch.device(device) for device in config['devices']]
     print("\nHyperparameters Configuration:")
     print("=" * 30)
     for key, value in config.items():
         print(f"{key}: {value}")
     print()
-
-    random_seed = config['random_seed']
-    torch.manual_seed(random_seed)
-    torch.cuda.manual_seed(random_seed)
-    torch.cuda.manual_seed_all(random_seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    random.seed(random_seed)
 
     trainer = Trainer(
         max_len_seq=config['max_len_seq'],
@@ -54,9 +45,6 @@ def train(config):
         lr_peak=config['lr_peak'],
         weight_decay=config['weight_decay'],
         warmup_steps=config['warmup_steps'],
-        balance=config['balance'],
-        devices=config['devices'],
-        chunks=config['chunks']
     )
     trainer.train()
 

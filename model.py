@@ -1,188 +1,214 @@
+import math
+import inspect
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
-from einops import rearrange
+from torch.nn import functional as F
 
+class LayerNorm(nn.Module):
+    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
-class MHA(nn.Module):
-    def __init__(self, d_model, n_heads, drop_p, max_len_seq):
+    def __init__(self, ndim, bias):
         super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
 
-        self.n_heads = n_heads
-        self.d_model = d_model
-        self.drop_p = drop_p
-        self.max_len_seq = max_len_seq
+    def forward(self, input):
+        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
-        self.fc_q = nn.Linear(d_model, d_model)
-        self.fc_k = nn.Linear(d_model, d_model)
-        self.fc_v = nn.Linear(d_model, d_model)
-        self.fc_out = nn.Linear(d_model, d_model)
+class CausalSelfAttention(nn.Module):
 
-        self.dropout = nn.Dropout(drop_p)
-        self.scale = torch.sqrt(torch.tensor(d_model / n_heads))
-
-        freqs = self.get_positional_encodings(max_len_seq, d_model // n_heads)
-        self.register_buffer('cos_pos', freqs.cos())
-        self.register_buffer('sin_pos', freqs.sin())
-
-    def get_positional_encodings(self, seq_len, dim):
-        theta = 10000 ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim)
-        pos = torch.arange(seq_len, dtype=torch.float32).unsqueeze(1)
-        freqs = pos / theta
-        freqs = torch.cat((freqs, freqs), dim=-1)
-        return freqs
-
-    def rotate_half(self, x):
-        x = rearrange(x, '... (d r) -> ... d r', r=2)
-        x1, x2 = x.unbind(dim=-1)
-        x = torch.stack((-x2, x1), dim=-1)
-        return rearrange(x, '... d r -> ... (d r)')
-
-    def apply_rotary_emb(self, cos_pos, sin_pos, t, start_index=0):
-        rot_dim = cos_pos.shape[-1]
-        end_index = start_index + rot_dim
-        assert rot_dim <= t.shape[
-            -1], f'feature dimension {t.shape[-1]} is not of sufficient size to rotate in all the positions {rot_dim}'
-
-        t_left, t, t_right = t[..., :start_index], t[..., start_index:end_index], t[..., end_index:]
-        t = (t * cos_pos) + (self.rotate_half(t) * sin_pos)
-        return torch.cat((t_left, t, t_right), dim=-1)
-
-    def forward(self, x):
-        q = self.fc_q(x)
-        k = self.fc_k(x)
-        v = self.fc_v(x)
-
-        q = rearrange(q, 'N W (H D) -> N H W D', H=self.n_heads)
-        k = rearrange(k, 'N W (H D) -> N H W D', H=self.n_heads)
-        v = rearrange(v, 'N W (H D) -> N H W D', H=self.n_heads)
-
-        seq_len = q.shape[-2]
-        assert seq_len <= self.max_len_seq, f'Sequence length {seq_len} exceeds the maximum sequence length {self.max_len_seq}'
-
-        cos_pos = self.cos_pos[:seq_len, :]
-        sin_pos = self.sin_pos[:seq_len, :]
-
-        q = self.apply_rotary_emb(cos_pos, sin_pos, q)
-        k = self.apply_rotary_emb(cos_pos, sin_pos, k)
-
-        #att_score = q @ k.transpose(-2, -1) / self.scale 
-        #causal_mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool().to(x.device)
-        #att_score.masked_fill_(causal_mask, float('-inf'))
-        #att_weights = torch.softmax(att_score, dim=-1) 
-        #att_weights = self.dropout(att_weights) 
-        #att = att_weights @ v
-
-        att = nn.functional.scaled_dot_product_attention(
-            query=q, key=k, value=v, dropout_p=self.drop_p, is_causal=True, scale=self.scale)
-
-        x = rearrange(att, 'N H W D -> N W (H D)')
-        x = self.fc_out(x)
-
-        return x
-
-
-class FeedForward(nn.Module):
-    def __init__(self, dim, hidden_dim, drop_p):
-        super(FeedForward, self).__init__()
-        self.dim = dim
-        self.hidden_dim = hidden_dim
-        self.fc_gate = nn.Linear(dim, hidden_dim)
-        self.fc_up = nn.Linear(dim, hidden_dim)
-        self.fc_down = nn.Linear(hidden_dim, dim)
-        self.dropout = nn.Dropout(drop_p)
-
-    def forward(self, x):
-        x_gate = self.dropout(nn.functional.silu(self.fc_gate(x)))
-        x_up = self.dropout(self.fc_up(x))
-        x_down = self.fc_down(x_gate * x_up)
-        return x_down
-
-
-class RMSLayerNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super(RMSLayerNorm, self).__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)  # 그냥 sqrt한 것의 역수
-
-    def forward(self, x):
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
-
-
-class DecoderLayer(nn.Module):
-    def __init__(self, d_model, d_ff, n_heads, drop_p, max_len_seq):
+    def __init__(self, config):
         super().__init__()
-
-        self.norm_mha = RMSLayerNorm(d_model)
-
-        self.mha = MHA(d_model, n_heads, drop_p, max_len_seq)
-
-        self.norm_ff = RMSLayerNorm(d_model)
-
-        self.ff = FeedForward(d_model, d_ff, drop_p)
-
-        self.dropout = nn.Dropout(drop_p)
+        assert config.n_embd % config.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        # output projection
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        # regularization
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.dropout = config.dropout
+        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        if not self.flash:
+            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+            # causal mask to ensure that attention is only applied to the left in the input sequence
+            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                        .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x):
-        residual = self.norm_mha(x)
-        residual = self.mha(residual)
-        residual = self.dropout(residual)
-        x = x + residual
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
-        residual = self.norm_ff(x)
-        residual = self.ff(residual)
-        residual = self.dropout(residual)
-        x = x + residual
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
-        return x
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        if self.flash:
+            # efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+        else:
+            # manual implementation of attention
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            att = F.softmax(att, dim=-1)
+            att = self.attn_dropout(att)
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
+        # output projection
+        y = self.resid_dropout(self.c_proj(y))
+        return y
 
-class Decoder(nn.Module):
-    def __init__(self, vocab_size, max_len_seq, n_layers, d_model, d_ff, n_heads, drop_p):
+class MLP(nn.Module):
+
+    def __init__(self, config):
         super().__init__()
-
-        self.emb_in = nn.Embedding(vocab_size, d_model)
-
-        self.dropout = nn.Dropout(drop_p)
-
-        self.layers = nn.Sequential(
-            *[DecoderLayer(d_model, d_ff, n_heads, drop_p, max_len_seq) for _ in range(n_layers)])
-
-        self.norm_out = RMSLayerNorm(d_model)
-
-        self.fc_out = nn.Linear(d_model, vocab_size)
+        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.gelu    = nn.GELU()
+        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.emb_in(x)
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
         x = self.dropout(x)
+        return x
 
-        x = self.layers(x)
+class Block(nn.Module):
 
-        x = self.norm_out(x)
-        x = self.fc_out(x)
+    def __init__(self, config):
+        super().__init__()
+        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.mlp = MLP(config)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+
+@dataclass
+class GPTConfig:
+    block_size: int = 1024
+    vocab_size: int = 50304 
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    dropout: float = 0.0
+    bias: bool = True 
+
+class GPT(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        assert config.vocab_size is not None
+        assert config.block_size is not None
+        self.config = config
+
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd),
+            drop = nn.Dropout(config.dropout),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+        ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # with weight tying when using torch.compile() some warnings get generated:
+        # "UserWarning: functional_call was passed multiple values for tied weights.
+        # This behavior is deprecated and will be an error in future versions"
+        # not 100% sure what this is, so far seems to be harmless. TODO investigate
+        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+
+        # init all weights
+        self.apply(self._init_weights)
+        # apply special scaled init to the residual projections, per GPT-2 paper
+        for pn, p in self.named_parameters():
+            if pn.endswith('c_proj.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+
+        # report number of parameters
+        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+
+    def get_num_params(self, non_embedding=True):
+        """
+        Return the number of parameters in the model.
+        For non-embedding count (default), the position embeddings get subtracted.
+        The token embeddings would too, except due to the parameter sharing these
+        params are actually used as weights in the final layer, so we include them.
+        """
+        n_params = sum(p.numel() for p in self.parameters())
+        if non_embedding:
+            n_params -= self.transformer.wpe.weight.numel()
+        return n_params
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(self, idx, targets=None):
+        device = idx.device
+        b, t = idx.size()
+        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+
+        # forward the GPT model itself
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+        x = self.transformer.drop(tok_emb + pos_emb)
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        x = self.lm_head(x)
 
         return x
 
+    def crop_block_size(self, block_size):
+        # model surgery to decrease the block size if necessary
+        # e.g. we may load the GPT2 pretrained model checkpoint (block size 1024)
+        # but want to use a smaller block size for some smaller, simpler model
+        assert block_size <= self.config.block_size
+        self.config.block_size = block_size
+        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+        for block in self.transformer.h:
+            if hasattr(block.attn, 'bias'):
+                block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
 
-class LLaMA(nn.Module):
-    def __init__(self, vocab_size, max_len_seq, n_layers, d_model, d_ff, n_heads, drop_p):
-        super().__init__()
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        """
+        for _ in range(max_new_tokens):
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # forward the model to get the logits for the index in the sequence
+            logits = self(idx_cond)
+            # pluck the logits at the final step and scale by desired temperature
+            logits = logits[:, -1, :] / temperature
+            # optionally crop the logits to only the top k options
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            # apply softmax to convert logits to (normalized) probabilities
+            probs = F.softmax(logits, dim=-1)
+            # sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)
+            # append sampled index to the running sequence and continue
+            idx = torch.cat((idx, idx_next), dim=1)
 
-        self.decoder = Decoder(vocab_size, max_len_seq, n_layers, d_model, d_ff, n_heads, drop_p)
-
-        self.n_heads = n_heads
-
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, mean=0, std=0.02)
-                m.weight.data *= 1 / torch.sqrt(torch.tensor(n_layers * 2))
-            elif isinstance(m, nn.Embedding):
-                nn.init.normal_(m.weight, mean=0, std=0.02)
-        nn.init.normal_(self.decoder.fc_out.weight, mean=0, std=0.02)
-
-    def forward(self, x):
-        out = self.decoder(x)
-        return out
+        return idx
